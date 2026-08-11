@@ -1,0 +1,100 @@
+# Stage 1 first formal experiment: stable RPM-load sweep only.
+data:
+  path: ../../PORT/data/routerbench_0shot.pkl
+  splits:
+    historical: 26481
+    calibration: 500
+    streaming: 9500
+    seed: 2025
+
+profiles:
+  neighbors: 16
+  max_features: 4096
+  query_batch_size: 256
+  n_jobs: 1
+
+synthetic:
+  historical_seed: 101
+  speed_permutation: 0
+  intercept_range: [0.20, 0.85]
+  tokens_per_second_range: [16.0, 64.0]
+  noise:
+    lognormal_sigma: 0.22
+    tail_probability: 0.01
+    tail_multiplier: 4.0
+    tail_pareto_shape: 3.0
+    maximum_multiplier: 25.0
+
+quota:
+  homogeneous_rpm: 60.0
+  rpm_bucket_capacity: 6.0
+  heterogeneous_rpm_values: [30.0, 60.0, 120.0, 240.0]
+  tpm_rate_scale: 1.0
+  tpm_bucket_request_equivalents: 6.0
+  tpm_demand_quantile: 0.99
+  tpm_calibration_max_headroom: 1.10
+
+routing:
+  # End-to-end deadline D_t in seconds.  It covers RPM admission wait plus the
+  # black-box API response time.  It is fixed before streaming.
+  deadline_seconds: 8.0
+  # Fallback values used only when calibration.enabled=false.  In the formal
+  # Stage 1 path, beta is the LP dual of B^C and lambda is selected from
+  # calibration.lambda_grid by replay on the calibration split.
+  beta: 0.10
+  # Fallback value used only when calibration.enabled=false.
+  lambda_penalty: 1.00
+  # If true, solve the calibration proxy LP for beta* and gamma*.  If false,
+  # gamma is set to zero and beta falls back to routing.beta.
+  gamma_proxy: true
+  # Null means each bucket starts full.
+  initial_rpm_tokens: null
+  initial_tpm_tokens: null
+
+calibration:
+  enabled: true
+  # The same 500-query calibration split is replayed separately for each fixed
+  # rho condition. beta/gamma/lambda are then frozen across that condition's
+  # policies and seeds. No streaming outcome is used here.
+  seed: 17
+  # Standalone fallback values; run_experiment uses each experiment condition's
+  # quota_mode/quota_load for condition-specific calibration.
+  quota_mode: rpm_only
+  quota_load: 0.70
+  # Cost budget B^C for the calibration proxy LP.  Costs are first normalised
+  # by the calibration p95 cost scale, then constrained by:
+  #   sum_{m,i} y_{mi} * normalized_cost_{mi} <= B^C
+  # If cost_budget_normalized_total is omitted, the total budget is:
+  #   B^C = cost_budget_normalized_per_task * |C|
+  cost_budget_normalized_per_task: 0.15
+  # beta* and gamma* come from the LP dual variables.  lambda* is not an LP
+  # dual because SLO risk depends on online RPM state; select it by calibration
+  # replay after beta/gamma are frozen.
+  lambda_grid: [0.0, 0.25, 0.50, 1.0]
+  # Replay selection utility:
+  #   quality_mean - selection_cost_weight * normalized_cost_mean
+  #                - selection_slo_weight * slo_violation_rate
+  selection_cost_weight: 0.10
+  selection_slo_weight: 1.00
+
+experiment:
+  seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  policies:
+    - quality_cost
+    - static_latency
+    - rpm_aware
+    - available
+    - best_quality
+    - min_latency_risk
+    - random
+  conditions:
+    - {name: stable_rho_030, arrival: poisson, quota_mode: rpm_only, quota_load: 0.30}
+    - {name: stable_rho_050, arrival: poisson, quota_mode: rpm_only, quota_load: 0.50}
+    - {name: stable_rho_070, arrival: poisson, quota_mode: rpm_only, quota_load: 0.70}
+    - {name: stable_rho_090, arrival: poisson, quota_mode: rpm_only, quota_load: 0.90}
+    - {name: stable_rho_095, arrival: poisson, quota_mode: rpm_only, quota_load: 0.95}
+  robustness:
+    enabled: false
+  seed_offset: 10000
+  output_dir: results/stage1_stable_rpm
+  save_traces: true
